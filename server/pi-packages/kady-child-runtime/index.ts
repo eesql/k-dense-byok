@@ -47,5 +47,11 @@ export default function (pi: ExtensionAPI) {
     });
     pi.events.emit("subagent:acknowledge-extension", { id: "kady-child-runtime" });
   });
-  pi.on("session_shutdown", () => dispose?.());
+  pi.on("session_shutdown", async (_event, ctx) => {
+    dispose?.();
+    if (process.env.KADY_MANAGED_PROJECT && process.env.KADY_SUBAGENT_HOST_MODULE) {
+      const host = await import(process.env.KADY_SUBAGENT_HOST_MODULE);
+      await host.finishManagedChild(ctx.sessionManager.getSessionId());
+    }
+  });
 }

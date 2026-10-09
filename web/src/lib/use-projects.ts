@@ -81,7 +81,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       // machine that doesn't have it yet), fall back to the default.
       const current = getActiveProjectId();
       if (list.length > 0 && !list.some((p) => p.id === current)) {
-        setActiveProjectId(DEFAULT_PROJECT_ID);
+        setActiveProjectId(process.env.NEXT_PUBLIC_KADY_MULTI_TENANT === "1" ? list[0].id : DEFAULT_PROJECT_ID);
       }
     } catch (exc) {
       if (seq !== refreshSeq.current) return;

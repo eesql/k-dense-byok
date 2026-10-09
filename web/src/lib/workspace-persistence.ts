@@ -9,6 +9,7 @@ import type { ModalComputeScope } from "@/lib/modal-jobs";
 import type { Skill } from "@/lib/use-skills";
 
 export const WORKSPACE_SCHEMA_VERSION = 1;
+import { managedStorageKey } from "@/lib/managed-storage";
 export const WORKSPACE_STORAGE_KEY = "kady:workspace:v1";
 
 const DB_NAME = "kady-workspace";
@@ -140,6 +141,7 @@ interface BlobRecord {
 }
 
 let databasePromise: Promise<IDBDatabase | null> | null = null;
+let databaseName: string | null = null;
 let metadataWriteChain = Promise.resolve();
 const projectWriteChains = new Map<string, Promise<void>>();
 const projectWriteVersions = new Map<string, number>();
@@ -409,7 +411,7 @@ export function pruneWorkspaceMetadata(
 function readMetadata(): StoredWorkspaceMetadata {
   if (typeof window === "undefined") return { ...EMPTY_METADATA, projects: {} };
   try {
-    return parseWorkspaceMetadata(window.localStorage.getItem(WORKSPACE_STORAGE_KEY));
+    return parseWorkspaceMetadata(window.localStorage.getItem(managedStorageKey(WORKSPACE_STORAGE_KEY)));
   } catch {
     return { ...EMPTY_METADATA, projects: {} };
   }
@@ -418,7 +420,7 @@ function readMetadata(): StoredWorkspaceMetadata {
 function writeMetadata(metadata: StoredWorkspaceMetadata): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(metadata));
+    window.localStorage.setItem(managedStorageKey(WORKSPACE_STORAGE_KEY), JSON.stringify(metadata));
   } catch {
     // Storage can be disabled or full. Persistence is always best-effort.
   }
@@ -448,6 +450,11 @@ function enqueueProjectWrite(
 }
 
 function openDatabase(): Promise<IDBDatabase | null> {
+  const name = managedStorageKey(DB_NAME);
+  if (databaseName !== name) {
+    void databasePromise?.then(db => db?.close());
+    databasePromise = null; databaseName = name;
+  }
   if (databasePromise) return databasePromise;
   databasePromise = new Promise((resolve) => {
     if (typeof indexedDB === "undefined") {
@@ -455,7 +462,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
       return;
     }
     try {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open(name, DB_VERSION);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains(BLOB_STORE)) {
           request.result.createObjectStore(BLOB_STORE, { keyPath: "key" });

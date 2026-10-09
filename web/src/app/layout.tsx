@@ -5,7 +5,10 @@ import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ProjectProvider } from "@/lib/use-projects";
 import { ApiTokenGate } from "@/components/api-token-gate";
+import dynamic from "next/dynamic";
 import "./globals.css";
+
+const ManagedShell = dynamic(() => import("@/components/multitenant-shell").then(module => module.ManagedShell));
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,11 +36,13 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <ProjectProvider>
+          {process.env.NEXT_PUBLIC_KADY_MULTI_TENANT === "1" ? <ManagedShell>
             <TooltipProvider delayDuration={350}>{children}</TooltipProvider>
-          </ProjectProvider>
+          </ManagedShell> : <ProjectProvider>
+            <TooltipProvider delayDuration={350}>{children}</TooltipProvider>
+          </ProjectProvider>}
           <Toaster />
-          <ApiTokenGate />
+          {process.env.NEXT_PUBLIC_KADY_MULTI_TENANT !== "1" ? <ApiTokenGate /> : null}
         </ThemeProvider>
       </body>
     </html>

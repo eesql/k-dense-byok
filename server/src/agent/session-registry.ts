@@ -479,6 +479,11 @@ async function build(
     throw error;
   }
   holder.session = session;
+  if (process.env.KADY_MANAGED_PROJECT) {
+    const managed = await import("../multitenant/worker-hooks.ts");
+    const { captureManagedAuth } = await import("./subagent-host.mjs");
+    session.agent.streamFunction = captureManagedAuth(session.agent.streamFunction.bind(session.agent), modelRuntime, () => managed.acquireManagedTask(`session:${session.sessionId}`));
+  }
   if (observerFactory) {
     observers.set(keyFor(projectId, session.sessionId), observerFactory({ projectId, paths, session }));
   }

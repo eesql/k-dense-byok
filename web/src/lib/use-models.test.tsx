@@ -94,11 +94,8 @@ describe("useModels provider merge", () => {
     expect(
       result.current.isModelAvailable({ id: "openai-codex/gpt-test" }),
     ).toBe(true);
-    expect(
-      result.current.models.find((model) =>
-        model.id.startsWith("openrouter/"),
-      )?.available,
-    ).toBe(false);
+    expect(result.current.models.some(model => model.id.startsWith("openrouter/"))).toBe(false);
+    expect(result.current.isModelAvailable({ id: "openrouter/openai/gpt-5.5" })).toBe(false);
     await waitFor(() =>
       expect(
         second.result.current.models.some(

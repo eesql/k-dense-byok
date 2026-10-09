@@ -126,6 +126,10 @@ export async function buildApp() {
   // withActiveProject keeps the store active for downstream hooks + handler.
   app.addHook("onRequest", (req, reply, done) => {
     let projectId = resolveProjectId(req);
+    if (process.env.KADY_MANAGED_PROJECT && projectId !== DEFAULT_PROJECT_ID) {
+      reply.code(404).send({ reason: "project_not_found", detail: "Project not found" });
+      return;
+    }
     try {
       // Only the default project is created on demand. An unknown id here is
       // a stale header (e.g. an in-flight poll for a just-deleted project) —
@@ -172,6 +176,11 @@ export async function buildApp() {
 
   app.get("/health", async () => ({ status: "ok" }));
   app.get("/config", async () => ({ modal_configured: modalConfigured() }));
+
+  if (process.env.KADY_MANAGED_PROJECT) {
+    const { registerManagedWorker } = await import("./multitenant/worker-hooks.ts");
+    await registerManagedWorker(app);
+  }
 
   // Adopt turns that Pi extensions start on an idle session (supervisor
   // requests, scheduled-run notices) as streamed, ledgered Kady runs.
@@ -246,7 +255,7 @@ if (isMain) {
   // only be used by the child `pi` processes that run subagents.
   const proxy = configureHttpProxy();
   const tokenSuppliedAtBoot = (process.env.KADY_AUTH_TOKEN?.trim().length ?? 0) >= 16;
-  syncHelperVenv(); // best-effort; previews degrade gracefully if it fails
+  if (!process.env.KADY_MANAGED_PROJECT) syncHelperVenv(); // Managed workers reuse the installed helper runtime.
   const app = await buildApp();
   // Durable pi-subagents schedules fire from a resident session per project;
   // open those hosts now and keep the budget hold reconciled (not in
@@ -267,6 +276,11 @@ if (isMain) {
     .listen({ port: PORT, host: HOST })
     .then((addr) => {
       app.log.info(`kady-server listening on ${addr}`);
+      if (process.env.KADY_MANAGED_PROJECT) {
+        process.env.KADY_INTERNAL_URL = addr;
+        process.send?.({ type: "kady-ready", address: addr });
+        process.on("disconnect", () => process.exit(0));
+      }
       const token = ensureAuthToken();
       if (isExposedBind()) {
         app.log.warn(

@@ -391,6 +391,11 @@ export async function executeRun(opened: OpenedRun, opts: ExecuteRunOptions): Pr
 
     if (!refused) {
       try {
+        if (process.env.KADY_MANAGED_PROJECT) {
+          const managed = await import("../multitenant/worker-hooks.ts");
+          try { await managed.acquireManagedTask(`session:${sessionId}`); }
+          catch (error) { opts.onBudgetAbort?.(); throw error; }
+        }
         await opts.run();
         // Surface a provider/agent error that didn't already stream as a frame
         // (e.g. auth failure with an empty assistant turn).
@@ -480,5 +485,9 @@ export async function executeRun(opened: OpenedRun, opts: ExecuteRunOptions): Pr
       handle.complete();
     }
     impl.cleanup();
+    if (process.env.KADY_MANAGED_PROJECT) {
+      const managed = await import("../multitenant/worker-hooks.ts");
+      await managed.releaseManagedTask(`session:${sessionId}`).catch(() => {});
+    }
   }
 }

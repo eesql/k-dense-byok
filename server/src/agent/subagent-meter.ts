@@ -32,7 +32,7 @@ export function recoverSubagentUsage(projectId: string): void {
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf8"));
       if (raw.projectId !== projectId) throw new Error("Mismatched accounting project");
-      handleSubagentMeter("usage", raw);
+      meterCore("usage", raw);
       fs.rmSync(file, { force: true });
     } catch (error) {
       // Keep the receipt and fail admission visibly rather than silently losing spend.
@@ -41,6 +41,25 @@ export function recoverSubagentUsage(projectId: string): void {
   }
 }
 export function handleSubagentMeter(action: string, raw: Record<string, unknown>) {
+  if (process.env.KADY_MANAGED_PROJECT) return (async () => {
+    if (raw.projectId !== process.env.KADY_MANAGED_PROJECT) throw new Error("Project identity mismatch");
+    const managed = await import("../multitenant/worker-hooks.ts");
+    const child = raw.kind === "watchdog" ? raw.requestId : typeof raw.childSessionId === "string" ? raw.childSessionId : raw.requestId;
+    if (typeof child !== "string" || !ID.test(child)) throw new Error("Invalid child identity");
+    const key = `${raw.kind === "watchdog" ? "review" : "child"}:${child}`;
+    if (action === "task-end") { await managed.releaseManagedTask(key); return { ok: true }; }
+    if (action === "task-start") { await managed.acquireManagedTask(key); return { ok: true }; }
+    if (action === "admit") {
+      if (process.env.KADY_MANAGED_SUPPLY === "platform" && raw.provider !== "openrouter") throw new Error("Platform specialists require OpenRouter");
+      await managed.acquireManagedTask(key);
+    }
+    try { return meterCore(action, raw); }
+    catch (error) { if (action === "admit" && raw.kind === "watchdog") await managed.releaseManagedTask(key); throw error; }
+    finally { if (action === "usage" && raw.kind === "watchdog") await managed.releaseManagedTask(key); }
+  })();
+  return meterCore(action, raw);
+}
+function meterCore(action: string, raw: Record<string, unknown>) {
   const { projectId, sessionId, provider, model, requestId, kind } = raw;
   if (![projectId, sessionId, requestId].every((s) => typeof s === "string" && ID.test(s)) ||
       typeof provider !== "string" || !provider || provider.length > 200 || typeof model !== "string" || !model || model.length > 500 ||

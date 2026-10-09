@@ -33,6 +33,7 @@ import { readAppDefaults } from "../app-settings.ts";
 import { isSubscriptionProvider, subscriptionProvider } from "./provider-auth.ts";
 import { customProviderName, isCustomProvider } from "./custom-models.ts";
 import { directProvider, isDirectProvider } from "./provider-catalog.ts";
+import { restrictPlatformModels } from "./subagent-host.mjs";
 
 // OpenRouter's base URL. Overridable via OPENROUTER_BASE_URL so the
 // OpenAI-compatible provider can point at any compatible gateway — e.g.
@@ -52,6 +53,17 @@ interface CatalogueEntry {
 }
 
 let catalogue: Map<string, CatalogueEntry> | null = null;
+
+/** Live authenticated rows also price models newer than the bundled catalogue. */
+export function updateOpenRouterCatalogue(rows: { id: string; label: string; context_length: number; pricing: { prompt: number; completion: number }; modality: string; max_completion_tokens: number }[]) {
+  const current = loadCatalogue();
+  for (const row of rows) current.set(stripOpenRouter(row.id), {
+    label: row.label, contextWindow: row.context_length || 128_000,
+    maxTokens: row.max_completion_tokens,
+    costInput: row.pricing.prompt, costOutput: row.pricing.completion,
+    input: row.modality.includes("image") ? ["text", "image"] : ["text"],
+  });
+}
 
 /** Normalize a frontend/user model ref to a bare OpenRouter id ("vendor/model"). */
 function stripOpenRouter(ref: string): string {
@@ -140,14 +152,14 @@ function buildOpenRouterModel(orId: string): Model<Api> {
 }
 
 /** Panel (analysis) model ids out of a Fusion request body (real schema). */
-function fusionPanelModels(fusionConfig: Record<string, unknown>): string[] {
+export function fusionPanelModels(fusionConfig: Record<string, unknown>): string[] {
   const plugins = fusionConfig.plugins as Array<Record<string, unknown>> | undefined;
   const panel = plugins?.[0]?.analysis_models;
   return Array.isArray(panel) ? (panel as string[]) : [];
 }
 
 /** Judge model id out of a Fusion request body (`plugins[0].model`). */
-function fusionJudgeModel(fusionConfig: Record<string, unknown>): string | undefined {
+export function fusionJudgeModel(fusionConfig: Record<string, unknown>): string | undefined {
   const plugins = fusionConfig.plugins as Array<Record<string, unknown>> | undefined;
   const judge = plugins?.[0]?.model;
   return typeof judge === "string" && judge.trim() ? judge : undefined;
@@ -171,7 +183,7 @@ function fusionJudgeModel(fusionConfig: Record<string, unknown>): string | undef
  * [1] https://openrouter.ai/docs/guides/routing/routers/fusion-router
  * [2] https://openrouter.ai/docs/guides/features/plugins/fusion
  */
-const JUDGE_CALLS_PER_TURN = 2;
+export const JUDGE_CALLS_PER_TURN = 2;
 
 /**
  * Build the Pi Model for an OpenRouter Fusion run. The id is "openrouter/fusion"
@@ -327,6 +339,7 @@ export function registerLocalProviders(modelRuntime: ModelRuntime): void {
 /** Configure app-specific providers and normalize the legacy OpenRouter alias. */
 export async function setupModelRuntime(modelRuntime: ModelRuntime): Promise<void> {
   registerLocalProviders(modelRuntime);
+  restrictPlatformModels(modelRuntime);
 
   // Let Pi resolve stored credentials before ambient keys, consistently in
   // lead/child runtimes and after restart. A runtime override masks OAuth.

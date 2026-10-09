@@ -1721,7 +1721,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
   const [selectedModel, setSelectedModel] = useState<Model>(
     () => initialWorkspaceState?.selectedModel ?? DEFAULT_MODEL,
   );
-  const { isModelAvailable, modelAvailability, hasAnyModelAccess, models: knownModels } = useModels();
+  const { isModelAvailable, modelAvailability, hasAnyModelAccess, models: knownModels, providerStatuses = [] } = useModels();
   const selectedModelAvailability = modelAvailability(selectedModel);
   const selectedModelAvailable = selectedModelAvailability === "available";
   const selectedBudgetBlocked =
@@ -2310,7 +2310,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
           {messages.length === 0 ? (
             hasAnyModelAccess === false ? (
               <div className="flex size-full items-center justify-center p-8">
-                <ConnectModelCard />
+                <ConnectModelCard platformManaged={providerStatuses.some(provider => provider.source === "Platform")} />
               </div>
             ) : (
               <ConversationEmptyState

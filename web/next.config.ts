@@ -19,6 +19,9 @@ function readAppVersion(): string {
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  ...(process.env.NEXT_PUBLIC_KADY_MULTI_TENANT === "1" && process.env.KADY_PUBLIC_URL
+    ? { allowedDevOrigins: [new URL(process.env.KADY_PUBLIC_URL).hostname] }
+    : {}),
   async headers() {
     return [{ source: "/office/:path*", headers: [
       { key: "Cross-Origin-Opener-Policy", value: "same-origin" },

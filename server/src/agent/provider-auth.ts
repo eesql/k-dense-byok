@@ -20,7 +20,7 @@ import type { DirectProviderBilling, DirectProviderDefinition } from "./provider
  * OAuth-only in Kady. Pi 0.99 superseded `openai-codex` with Sign in with
  * ChatGPT on the `openai` provider; the legacy login stays so existing tokens
  * and stored `openai-codex/…` refs keep working. `openrouter` is listed so its OAuth login can replace a
- * pasted key, but its models come from the static catalogue, not this route.
+ * pasted key; its key-filtered models are listed by /openrouter/models.
  */
 export const SUBSCRIPTION_PROVIDER_IDS = [
   "openai",

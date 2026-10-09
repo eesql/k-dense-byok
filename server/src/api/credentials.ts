@@ -54,7 +54,7 @@ import {
 import { modalJobManager } from "../modal/manager.ts";
 import { notebookRobustness } from "../agent/notebook-robustness.ts";
 
-const ENV_PATH = path.join(REPO_ROOT, ".env");
+const ENV_PATH = process.env.KADY_ENV_FILE || path.join(REPO_ROOT, ".env");
 let credentialEnvPath = ENV_PATH;
 
 interface ManagedKey {

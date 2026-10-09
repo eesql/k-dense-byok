@@ -24,6 +24,7 @@ import {
 } from "../agent/custom-models.ts";
 import { getModelRuntime } from "../agent/session-registry.ts";
 import { credentialFieldFor } from "./credentials.ts";
+import { listOpenRouterModels } from "../agent/openrouter-models.ts";
 
 export interface RegisterModelProviderRoutesOptions {
   manager?: ProviderAuthManager;
@@ -157,6 +158,17 @@ export async function registerModelProviderRoutes(
     manager.dispose();
   });
 
+  app.get("/openrouter/models", async (_req, reply) => {
+    try {
+      const resolved = await runtime.getAuth("openrouter");
+      if (!resolved?.auth.apiKey) return { configured: false, models: [] };
+      const base = resolved.auth.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
+      return { configured: true, models: await listOpenRouterModels(resolved.auth.apiKey, `${base.replace(/\/$/, "")}/models/user`) };
+    } catch {
+      return reply.code(502).send({ detail: "Could not load models for the configured OpenRouter key. Check credentials and retry." });
+    }
+  });
+
   app.get("/model-providers", async (_req, reply) => {
     try {
       const providers = await Promise.all(
@@ -201,7 +213,7 @@ export async function registerModelProviderRoutes(
     try {
       const models: ReturnType<typeof modelForClient>[] = [];
       for (const definition of SUBSCRIPTION_PROVIDERS) {
-        // OpenRouter's rows come from the static catalogue; listing Pi's copy
+        // OpenRouter's rows come from /openrouter/models; listing Pi's copy
         // here would show every model twice.
         if (!definition.listModels) continue;
         const status = await manager.providerStatus(definition.id);
@@ -285,6 +297,8 @@ export async function registerModelProviderRoutes(
       // Custom servers from models.json: Pi lists them like any provider once
       // their (possibly placeholder) key resolves; priced as declared.
       for (const provider of listCustomProviders(options.customModelsDir)) {
+        // An OpenRouter base-URL override is not a second model source.
+        if (provider.id === "openrouter") continue;
         const auth = await safeCheckAuth(runtime, provider.id);
         providers.push({ id: provider.id, configured: auth !== undefined });
         if (!auth) continue;

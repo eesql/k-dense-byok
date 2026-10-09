@@ -25,7 +25,7 @@ import {
   type ProjectActivitySummary,
 } from "@/lib/project-activity";
 import { onChatPrefill } from "@/lib/chat-prefill";
-import { onOpenSettings, type OpenSettingsRequest } from "@/lib/settings-nav";
+import { onOpenSettings, openSettings, type OpenSettingsRequest } from "@/lib/settings-nav";
 import {
   OPEN_MODAL_JOB_EVENT,
   type ModalComputeScope,
@@ -112,6 +112,7 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 
 export default function HomePage() {
   const [screen, setScreen] = useState<WorkspaceScreen>("projects");
+  const [providerSettingsProject, setProviderSettingsProject] = useState<string | null>(null);
   const [openedProjectIds, setOpenedProjectIds] = useState<string[]>([]);
   const [restoredProjects, setRestoredProjects] = useState<
     Record<string, ProjectWorkspaceState>
@@ -167,6 +168,28 @@ export default function HomePage() {
     rememberProject(projectId);
     setScreen("workspace");
   }, [rememberProject]);
+
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_KADY_MULTI_TENANT !== "1") return;
+    const open = (event: Event) => {
+      const request = (event as CustomEvent<{ projectId?: string; providers?: boolean }>).detail;
+      if (!request?.projectId || !projects.some(project => project.id === request.projectId)) return;
+      openProject(request.projectId);
+      if (request.providers) setProviderSettingsProject(request.projectId);
+    };
+    window.addEventListener("kady:open-project", open);
+    return () => window.removeEventListener("kady:open-project", open);
+  }, [openProject, projects]);
+
+  useEffect(() => {
+    if (!providerSettingsProject || !workspaceHydrated || !projectDirectoryHydrated || screen !== "workspace" || activeProjectId !== providerSettingsProject || !openedProjectIds.includes(providerSettingsProject)) return;
+    // The destination workspace's Settings listener mounts before this deferred deep link.
+    const timer = window.setTimeout(() => {
+      openSettings({ tab: "providers", projectId: providerSettingsProject });
+      setProviderSettingsProject(null);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeProjectId, openedProjectIds, projectDirectoryHydrated, providerSettingsProject, screen, workspaceHydrated]);
 
   const handleProjectActivityChange = useCallback(
     (projectId: string, activity: ProjectActivitySummary) => {

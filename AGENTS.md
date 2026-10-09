@@ -131,6 +131,20 @@ projects/
 - **Windows portability.** Sandbox-relative paths are canonicalized to forward slashes at the API boundary (`apiRelative`/`toApiPath` in `server/src/sandbox-fs.ts`, `stripSandboxRoot` in `server/src/agent/events.ts`) — the frontend always sees `/`-separated paths. External binaries are located via `server/src/binaries.ts` (`hasBinary`/`findUv`/`firstRunnable`), never `which`. On Windows the agent's `bash` tool uses Git Bash (Git for Windows is a hard prerequisite there), the helper venv interpreter lives at `.venv/Scripts/python.exe`, and synctex is invoked from the PDF's directory with relative paths so drive-letter colons stay out of its colon-delimited args in the primary invocation (`forwardArgs`/`inverseArgs` in `server/src/latex/synctex.ts`; a forward-slash absolute-path retry exists as a fallback for absolute `Input:` records).
 - **Don't run our source through `tsc` for emit** — both dev and prod run via `tsx`; `tsconfig.json` is `noEmit` for typechecking only.
 
+## Agent skills
+
+### Issue tracker
+
+Track issues and specs in `eesql/k-dense-byok` GitHub Issues using `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root glossary and shared ADRs. See `docs/agents/domain.md`.
+
 ## Office preview and editing
 
 `server/src/api/office.ts` serves project-scoped `GET /sandbox/office` previews and `GET/PUT /sandbox/office/content` binary snapshots/saves. The existing helper venv validates bounded OOXML packages with DTD/entity rejection. Saves require an SHA-256 `If-Match` revision, recheck before atomic replacement, and record user provenance. Signed/enforced-protected documents cannot be overwritten.

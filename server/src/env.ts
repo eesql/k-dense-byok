@@ -18,9 +18,13 @@ const repoRoot = path.resolve(here, "..", "..");
 
 // Later files do not override earlier ones (existing env always wins), so
 // order is just discovery preference.
-applyEnvFile(path.join(repoRoot, ".env"));
-applyEnvFile(path.join(repoRoot, "kady_agent", ".env"));
-applyEnvFile(path.join(repoRoot, "server", ".env"));
+if (process.env.KADY_ENV_FILE) {
+  applyEnvFile(process.env.KADY_ENV_FILE);
+} else {
+  applyEnvFile(path.join(repoRoot, ".env"));
+  applyEnvFile(path.join(repoRoot, "kady_agent", ".env"));
+  applyEnvFile(path.join(repoRoot, "server", ".env"));
+}
 
 // Keep Kady's Pi credentials/settings separate from the user's standalone Pi
 // CLI by default. The same environment variable is inherited by pi-subagents'

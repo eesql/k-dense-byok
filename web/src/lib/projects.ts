@@ -3,6 +3,7 @@
 import { createContext, useContext } from "react";
 import type { ProjectActivitySummary } from "@/lib/project-activity";
 import { noteAuthFailure, withApiTokenHeader } from "@/lib/api-auth";
+import { managedStorageKey, managedIdentityKey } from "@/lib/managed-storage";
 
 /**
  * Project types, storage, and the `apiFetch` wrapper used by every hook.
@@ -118,7 +119,7 @@ export function useProjectScopeId(): string {
 export function getActiveProjectId(): string {
   if (typeof window === "undefined") return DEFAULT_PROJECT_ID;
   try {
-    const v = window.localStorage.getItem(STORAGE_KEY);
+    const v = window.localStorage.getItem(managedStorageKey(STORAGE_KEY));
     if (v && v.trim()) return v.trim();
   } catch {
     // localStorage can throw in private mode / with quota errors; fall back.
@@ -136,14 +137,14 @@ export function setActiveProjectId(id: string): void {
   if (typeof window === "undefined") return;
   const next = id?.trim() || DEFAULT_PROJECT_ID;
   try {
-    window.localStorage.setItem(STORAGE_KEY, next);
+    window.localStorage.setItem(managedStorageKey(STORAGE_KEY), next);
   } catch {
     // best-effort -- we'll still dispatch so at least the current tab updates
   }
   // Mirror into a cookie so <img>/<a> URLs to the backend land in the same
   // project (cookies are sent automatically; custom headers are not).
   try {
-    document.cookie = `kady-project=${encodeURIComponent(next)}; path=/; max-age=31536000; SameSite=Lax`;
+    if (!managedIdentityKey()) document.cookie = `kady-project=${encodeURIComponent(next)}; path=/; max-age=31536000; SameSite=Lax`;
   } catch {
     // Safari in private mode can throw; header/localStorage still work.
   }
@@ -167,7 +168,7 @@ export function onProjectChange(
     handler(id);
   };
   const storageListener = (ev: StorageEvent) => {
-    if (ev.key === STORAGE_KEY) handler(getActiveProjectId());
+    if (ev.key === managedStorageKey(STORAGE_KEY)) handler(getActiveProjectId());
   };
   window.addEventListener(CHANGE_EVENT, listener);
   window.addEventListener("storage", storageListener);
@@ -193,12 +194,16 @@ export function apiFetch(
   const base = lane === "stream" ? STREAM_API_BASE : API_BASE;
   const url = path.startsWith("http") ? path : `${base}${path}`;
   const headers = new Headers(init.headers);
+  const identity = managedIdentityKey();
+  if (identity && (isApiUrl(url) || (API_BASE.startsWith("/") && !path.startsWith("http")))) headers.set("X-Kady-User", identity.split(":")[0]);
   if (!headers.has("X-Project-Id")) {
     headers.set("X-Project-Id", projectId?.trim() || getActiveProjectId());
   }
   // Only our backend gets the access token, never an absolute third-party URL.
   if (isApiUrl(url)) withApiTokenHeader(headers);
   return fetch(url, { ...init, headers }).then((res) => {
+    if (identity !== managedIdentityKey()) throw new DOMException("Account changed", "AbortError");
+    if (identity && res.status === 401 && res.headers.get("X-Kady-Session") === "expired") window.dispatchEvent(new Event("kady:managed-session-expired"));
     noteAuthFailure(res);
     return res;
   });
@@ -248,7 +253,7 @@ export async function patchProject(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
-  });
+  }, id);
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(detail || `patchProject ${res.status}`);
@@ -259,7 +264,7 @@ export async function patchProject(
 export async function deleteProject(id: string): Promise<void> {
   const res = await apiFetch(`/projects/${encodeURIComponent(id)}`, {
     method: "DELETE",
-  });
+  }, id);
   if (!res.ok && res.status !== 204) {
     const detail = await res.text();
     throw new Error(detail || `deleteProject ${res.status}`);
@@ -276,7 +281,7 @@ export async function initProjectSandbox(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(opts),
-    }
+    }, id,
   );
   if (!res.ok) {
     const detail = await res.text();

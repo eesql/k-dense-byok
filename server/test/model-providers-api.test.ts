@@ -6,6 +6,8 @@ import {
   type ProviderAuthRuntime,
 } from "../src/agent/provider-auth.ts";
 import { registerModelProviderRoutes } from "../src/api/model-providers.ts";
+import { resolveModel } from "../src/agent/models.ts";
+import { getModelRegistry } from "../src/agent/session-registry.ts";
 
 const apps: ReturnType<typeof Fastify>[] = [];
 
@@ -65,9 +67,35 @@ async function appWithRuntime(authRuntime = runtime()) {
 
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
+  vi.unstubAllGlobals();
 });
 
 describe("model-provider routes", () => {
+  it("loads the key-filtered OpenRouter catalogue with effective Pi credentials and never returns keys", async () => {
+    const authRuntime = runtime();
+    authRuntime.getAuth = vi.fn(async () => ({ auth: { apiKey: "synthetic-stored-key", baseUrl: "https://openrouter.ai/api/v1" }, source: "stored credential" }));
+    const fetcher = vi.fn(async () => Response.json({ data: [
+      { id: "test/allowed", name: "Allowed model", pricing: { prompt: "0.000001", completion: "0.000002" }, architecture: { output_modalities: ["text"] } },
+      { id: "test/allowed", name: "Allowed model", pricing: { prompt: "0.000001", completion: "0.000002" } },
+      { id: "test/image", pricing: { prompt: "0", completion: "0.001" }, architecture: { output_modalities: ["image"] } },
+      { id: "test/unpriced", pricing: { prompt: null, completion: "" } },
+    ] }));
+    vi.stubGlobal("fetch", fetcher);
+    const { app } = await appWithRuntime(authRuntime);
+    const response = await app.inject({ method: "GET", url: "/openrouter/models" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().models).toEqual([expect.objectContaining({ id: "openrouter/test/allowed", pricing: { prompt: 1, completion: 2 } })]);
+    expect(fetcher.mock.calls[0][0]).toBe("https://openrouter.ai/api/v1/models/user");
+    expect(new Headers(fetcher.mock.calls[0][1].headers).get("authorization")).toBe("Bearer synthetic-stored-key");
+    expect(response.body).not.toContain("synthetic-stored-key");
+    const generated = resolveModel("openrouter/test/allowed", getModelRegistry());
+    expect(generated.cost.input).toBe(1);
+    expect(generated.cost.output).toBe(2);
+    fetcher.mockResolvedValueOnce(Response.json({ error: "synthetic-stored-key" }, { status: 401 }));
+    const rejected = await app.inject({ method: "GET", url: "/openrouter/models" });
+    expect(rejected.statusCode).toBe(502);
+    expect(rejected.body).not.toContain("synthetic-stored-key");
+  });
   it("returns non-secret OAuth status and available direct models", async () => {
     const { app } = await appWithRuntime();
 

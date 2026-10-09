@@ -75,7 +75,7 @@ export const KADY_SKILLS_CACHE_DIR = path.resolve(
     path.join(os.homedir(), ".kady", "skills-cache"),
 );
 
-export const DEFAULT_PROJECT_ID = "default";
+export const DEFAULT_PROJECT_ID = process.env.KADY_MANAGED_PROJECT || "default";
 
 /** HTTP port for the backend (matches the old ADK server). */
 export const PORT = Number(process.env.KADY_PORT ?? process.env.PORT ?? 8000);

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "start:multitenant": "tsx src/multitenant/main.ts",
     "prep": "tsx src/prep.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",

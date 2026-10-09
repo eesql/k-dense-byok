@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyEnvFile } from "./env-file.mjs";
+import { multiTenantEnabled } from "./multi-tenancy-mode.mjs";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isWin = process.platform === "win32";
@@ -577,7 +578,9 @@ log(`  Pi agent ${sym.ok} (bundled with backend packages — pinned in server/pa
 log("");
 
 setupEnv();
-await checkModelAccess();
+const multiTenant = multiTenantEnabled();
+process.env.NEXT_PUBLIC_KADY_MULTI_TENANT = multiTenant ? "1" : "0";
+if (!multiTenant) await checkModelAccess();
 
 if (flags.check) {
   log("");
@@ -588,6 +591,11 @@ if (flags.check) {
 installBackendPackages();
 installPackages("web", "frontend");
 log("");
+
+if (multiTenant) {
+  await (await import("./start-multitenant.mjs")).startMultitenant({ startService, waitFor, stopAll, log });
+  await new Promise(() => {});
+}
 
 const BACKEND_PORT = Number(process.env.KADY_PORT || 8000);
 const FRONTEND_PORT = Number(process.env.KADY_FRONTEND_PORT || 3000);

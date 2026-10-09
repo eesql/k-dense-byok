@@ -3,10 +3,51 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Agent } from 'undici';
+import { Agent, fetch } from 'undici';
 const direct = new Agent();
 let localMeter;
 const childOwners = new Map();
+const childAdmissions = new Map();
+const childCompletions = new Map();
+export function finishManagedChild(sessionId) {
+  const existing = childCompletions.get(sessionId);
+  if (existing) return existing;
+  const owner = childOwners.get(sessionId), admitted = childAdmissions.get(sessionId);
+  if (!owner || !admitted) return Promise.resolve();
+  const completed = admitted.then(() => meter('task-end', { ...owner, requestId: randomUUID() })).catch(() => {});
+  childCompletions.set(sessionId, completed);
+  return completed;
+}
+const restrictedRuntimes = new WeakSet();
+export function restrictPlatformModels(runtime) {
+  if (process.env.KADY_MANAGED_SUPPLY !== 'platform' || restrictedRuntimes.has(runtime)) return;
+  restrictedRuntimes.add(runtime);
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = async (target, options) => {
+    if ((typeof target === 'string' ? target : target.provider) !== 'openrouter') throw new Error('Platform model access is limited to OpenRouter; choose BYOK to use another provider');
+    return getAuth(target, options);
+  };
+}
+/** Per-work auth snapshot, not a process/global credential override. Child runtimes use the same public SDK contract. */
+export function captureManagedAuth(base, runtime, ownerKey = () => 'child-lifetime') {
+  if (!process.env.KADY_MANAGED_PROJECT) return base;
+  let current;
+  const credentials = new Map();
+  return async (model, context, options) => {
+    const owner = await ownerKey();
+    if (owner !== current) { current = owner; credentials.clear(); }
+    if (process.env.KADY_MANAGED_SUPPLY === 'platform' && model.provider !== 'openrouter') throw new Error('Platform projects require OpenRouter');
+    const key = `${model.provider}/${model.id}`;
+    let pending = credentials.get(key);
+    if (!pending) { pending = runtime.getAuth(model, { signal: options?.signal }); credentials.set(key, pending); }
+    const resolved = await pending;
+    if (!resolved) throw new Error(`Provider is not configured: ${model.provider}`);
+    return base({ ...model, ...(resolved.auth.baseUrl ? { baseUrl: resolved.auth.baseUrl } : {}) }, context, {
+      ...options, apiKey: resolved.auth.apiKey,
+      headers: { ...options?.headers, ...resolved.auth.headers }, env: { ...options?.env, ...resolved.env },
+    });
+  };
+}
 export function setHostMeter(handler) { localMeter = handler; }
 function projectOwner(cwd) {
   for (let dir = path.resolve(cwd);;) {
@@ -51,7 +92,9 @@ export function meteredStream(base, owner, usingOAuth) {
     const request = { ...owner, requestId: randomUUID(), provider: model.provider, model: model.id,
       authType: usingOAuth(model) ? 'oauth' : 'api_key' };
     await meter('admit', request);
-    const stream = await base(model, context, options);
+    let stream;
+    try { stream = await base(model, context, options); }
+    catch (error) { if (process.env.KADY_MANAGED_PROJECT) await meter('task-end', request); throw error; }
     // Meter before exposing the terminal event, so the next request and the
     // parent's completion cannot race ahead of accounting. Never consume twice.
     let settled;
@@ -73,13 +116,29 @@ export function meteredStream(base, owner, usingOAuth) {
   };
 }
 export function attachChildSession(session, launch, runtime) {
+  restrictPlatformModels(runtime);
   const parentId = launch.runtime.orchestratorSessionId || launch.runtime.parentSessionId || session.sessionId;
   const owner = { ...projectOwner(launch.cwd), sessionId: childOwners.get(parentId)?.sessionId || parentId,
     childSessionId: session.sessionId, sessionFile: session.sessionFile, kind: 'subagent', runId: launch.runtime.runId };
   childOwners.set(session.sessionId, owner);
+  const admitted = process.env.KADY_MANAGED_PROJECT ? meter('task-start', { ...owner, requestId: randomUUID() }) : Promise.resolve();
+  childAdmissions.set(session.sessionId, admitted);
+  admitted.catch(() => {}); // The stream awaits and surfaces admission; no orphan rejection before prompt() starts.
   const dispose = session.dispose.bind(session);
-  session.dispose = () => { childOwners.delete(session.sessionId); return dispose(); };
-  session.agent.streamFunction = meteredStream(session.agent.streamFunction.bind(session.agent), owner, model => runtime.isUsingOAuth(model.provider));
+  session.dispose = () => {
+    const cleanup = () => { childOwners.delete(session.sessionId); childAdmissions.delete(session.sessionId); childCompletions.delete(session.sessionId); return dispose(); };
+    if (!process.env.KADY_MANAGED_PROJECT) return cleanup();
+    // The detached runner awaits dispose before process.exit; retain that await through accounting.
+    return finishManagedChild(session.sessionId).finally(cleanup);
+  };
+  const authModes = new Map();
+  const usingOAuth = model => {
+    if (!process.env.KADY_MANAGED_PROJECT) return runtime.isUsingOAuth(model.provider);
+    if (!authModes.has(model.provider)) authModes.set(model.provider, runtime.isUsingOAuth(model.provider));
+    return authModes.get(model.provider);
+  };
+  const stream = meteredStream(captureManagedAuth(session.agent.streamFunction.bind(session.agent), runtime), owner, usingOAuth);
+  session.agent.streamFunction = async (...args) => { await admitted; return stream(...args); };
 }
 export function watchdogStream(ctx, base) {
   const sessionId = ctx.sessionManager.getSessionId();

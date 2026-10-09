@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { managedIdentityKey } from "@/lib/managed-storage";
 import staticModels from "@/data/models.json";
 import type { Model } from "@/components/model-selector";
-import { apiFetch, onProjectChange } from "@/lib/projects";
+import { apiFetch, onProjectChange, useProjectScopeId } from "@/lib/projects";
 import {
   JUDGE_CALLS_PER_TURN,
   fusionJudgeModel,
@@ -47,57 +48,54 @@ interface ProviderDiscovery {
   providers: ModelProviderStatus[];
   models: Model[];
   openrouterConfigured: boolean | null;
+  openrouterModels: Model[];
+  openrouterError: string | null;
 }
 
 const DISCOVERY_CACHE_MS = 2_000;
-let providerDiscoveryCache:
-  | { value: ProviderDiscovery; loadedAt: number }
-  | undefined;
-let providerDiscoveryInFlight: Promise<ProviderDiscovery> | undefined;
-let ollamaDiscoveryCache:
-  | { value: OllamaListResponse; loadedAt: number }
-  | undefined;
-let ollamaDiscoveryInFlight: Promise<OllamaListResponse> | undefined;
-let oaiCompatDiscoveryCache:
-  | { value: OpenAICompatibleListResponse; loadedAt: number }
-  | undefined;
-let oaiCompatDiscoveryInFlight:
-  | Promise<OpenAICompatibleListResponse>
-  | undefined;
-let directDiscoveryCache:
-  | { value: DirectProvidersResponse; loadedAt: number }
-  | undefined;
-let directDiscoveryInFlight: Promise<DirectProvidersResponse> | undefined;
+type DiscoveryContext = {
+  providerDiscoveryCache?: { value: ProviderDiscovery; loadedAt: number };
+  providerDiscoveryInFlight?: Promise<ProviderDiscovery>;
+  ollamaDiscoveryCache?: { value: OllamaListResponse; loadedAt: number };
+  ollamaDiscoveryInFlight?: Promise<OllamaListResponse>;
+  oaiCompatDiscoveryCache?: { value: OpenAICompatibleListResponse; loadedAt: number };
+  oaiCompatDiscoveryInFlight?: Promise<OpenAICompatibleListResponse>;
+  directDiscoveryCache?: { value: DirectProvidersResponse; loadedAt: number };
+  directDiscoveryInFlight?: Promise<DirectProvidersResponse>;
+};
+const discoveryContexts = new Map<string, DiscoveryContext>();
+function discoveryContext(projectId?: string): DiscoveryContext {
+  const key = projectId ? `${managedIdentityKey()}:${projectId}` : "single-user";
+  let context = discoveryContexts.get(key);
+  if (!context) { context = {}; discoveryContexts.set(key, context); }
+  return context;
+}
 let lastAuthChangeEvent: Event | undefined;
-
-/** Invalidate once per event, even when several pickers are mounted. */
 function invalidateDiscoveryForAuthChange(event: Event): void {
   if (lastAuthChangeEvent === event) return;
   lastAuthChangeEvent = event;
-  providerDiscoveryCache = undefined;
-  providerDiscoveryInFlight = undefined;
-  directDiscoveryCache = undefined;
-  directDiscoveryInFlight = undefined;
-  ollamaDiscoveryCache = undefined;
-  ollamaDiscoveryInFlight = undefined;
-  oaiCompatDiscoveryCache = undefined;
-  oaiCompatDiscoveryInFlight = undefined;
+  discoveryContexts.clear();
 }
 
-function discoverProviders(force = false): Promise<ProviderDiscovery> {
+function discoverProviders(force = false, projectId?: string): Promise<ProviderDiscovery> {
+  const context = discoveryContext(projectId);
   if (
     !force &&
-    providerDiscoveryCache &&
-    Date.now() - providerDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
+    context.providerDiscoveryCache &&
+    Date.now() - context.providerDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
   ) {
-    return Promise.resolve(providerDiscoveryCache.value);
+    return Promise.resolve(context.providerDiscoveryCache.value);
   }
-  if (providerDiscoveryInFlight) return providerDiscoveryInFlight;
+  if (context.providerDiscoveryInFlight) return context.providerDiscoveryInFlight;
   const request = Promise.all([
-    apiFetch("/model-providers"),
-    apiFetch("/model-providers/models"),
-    apiFetch("/credentials"),
-  ]).then(async ([providersResponse, modelsResponse, credentialsResponse]) => {
+    apiFetch("/model-providers", {}, projectId),
+    apiFetch("/model-providers/models", {}, projectId),
+    apiFetch("/credentials", {}, projectId),
+    apiFetch("/openrouter/models", {}, projectId).catch(() => null),
+  ]).then(async ([providersResponse, modelsResponse, credentialsResponse, openrouterResponse]) => {
+    const routerData = openrouterResponse?.ok
+      ? await openrouterResponse.json().catch(() => null) as { configured?: boolean; models?: Model[] } | null
+      : null;
     const providerData = providersResponse.ok
       ? ((await providersResponse.json()) as {
           providers?: ModelProviderStatus[];
@@ -118,7 +116,7 @@ function discoverProviders(force = false): Promise<ProviderDiscovery> {
     // OAuth credential does not fall back to an ambient key. Keep the older
     // response fallback for clients talking to a server during an upgrade.
     const openrouter = providers.find((provider) => provider.id === "openrouter");
-    const openrouterConfigured = openrouter?.configured ?? (
+    const openrouterConfigured = routerData?.configured ?? openrouter?.configured ?? (
       openrouter?.needsReauth ? false : credentialData?.openrouter
         ? Boolean(credentialData.openrouter.set) || Boolean(openrouter?.connected)
         : openrouter?.connected || null
@@ -127,111 +125,116 @@ function discoverProviders(force = false): Promise<ProviderDiscovery> {
       providers,
       models: Array.isArray(modelData?.models) ? modelData.models : [],
       openrouterConfigured,
+      openrouterModels: Array.isArray(routerData?.models) ? routerData.models : [],
+      openrouterError: Array.isArray(routerData?.models) ? null : "Could not load OpenRouter models for this key. Check credentials and retry.",
     };
-    if (providerDiscoveryInFlight === inFlight) {
-      providerDiscoveryCache = { value, loadedAt: Date.now() };
+    if (context.providerDiscoveryInFlight === inFlight) {
+      context.providerDiscoveryCache = { value, loadedAt: Date.now() };
     }
     return value;
   });
   const inFlight = request.finally(() => {
-    if (providerDiscoveryInFlight === inFlight) providerDiscoveryInFlight = undefined;
+    if (context.providerDiscoveryInFlight === inFlight) context.providerDiscoveryInFlight = undefined;
   });
-  providerDiscoveryInFlight = inFlight;
+  context.providerDiscoveryInFlight = inFlight;
   return inFlight;
 }
 
-function discoverOllama(force = false): Promise<OllamaListResponse> {
+function discoverOllama(force = false, projectId?: string): Promise<OllamaListResponse> {
+  const context = discoveryContext(projectId);
   if (
     !force &&
-    ollamaDiscoveryCache &&
-    Date.now() - ollamaDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
+    context.ollamaDiscoveryCache &&
+    Date.now() - context.ollamaDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
   ) {
-    return Promise.resolve(ollamaDiscoveryCache.value);
+    return Promise.resolve(context.ollamaDiscoveryCache.value);
   }
-  if (ollamaDiscoveryInFlight) return ollamaDiscoveryInFlight;
-  const request = apiFetch("/ollama/models").then(async (response) =>
+  if (context.ollamaDiscoveryInFlight) return context.ollamaDiscoveryInFlight;
+  const request = apiFetch("/ollama/models", {}, projectId).then(async (response) =>
     response.ok
       ? ((await response.json()) as OllamaListResponse)
       : { available: false, models: [] },
   );
   const inFlight = request
     .then((value) => {
-      if (ollamaDiscoveryInFlight === inFlight) {
-        ollamaDiscoveryCache = { value, loadedAt: Date.now() };
+      if (context.ollamaDiscoveryInFlight === inFlight) {
+        context.ollamaDiscoveryCache = { value, loadedAt: Date.now() };
       }
       return value;
     })
     .finally(() => {
-      if (ollamaDiscoveryInFlight === inFlight) ollamaDiscoveryInFlight = undefined;
+      if (context.ollamaDiscoveryInFlight === inFlight) context.ollamaDiscoveryInFlight = undefined;
     });
-  ollamaDiscoveryInFlight = inFlight;
+  context.ollamaDiscoveryInFlight = inFlight;
   return inFlight;
 }
 
 /** Parallel to discoverOllama; a separate endpoint speaking a separate protocol. */
 function discoverOpenAICompatible(
-  force = false,
+  force = false, projectId?: string,
 ): Promise<OpenAICompatibleListResponse> {
+  const context = discoveryContext(projectId);
   if (
     !force &&
-    oaiCompatDiscoveryCache &&
-    Date.now() - oaiCompatDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
+    context.oaiCompatDiscoveryCache &&
+    Date.now() - context.oaiCompatDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
   ) {
-    return Promise.resolve(oaiCompatDiscoveryCache.value);
+    return Promise.resolve(context.oaiCompatDiscoveryCache.value);
   }
-  if (oaiCompatDiscoveryInFlight) return oaiCompatDiscoveryInFlight;
-  const request = apiFetch("/openai-compatible/models").then(async (response) =>
+  if (context.oaiCompatDiscoveryInFlight) return context.oaiCompatDiscoveryInFlight;
+  const request = apiFetch("/openai-compatible/models", {}, projectId).then(async (response) =>
     response.ok
       ? ((await response.json()) as OpenAICompatibleListResponse)
       : { available: false, configured: false, models: [] },
   );
   const inFlight = request
     .then((value) => {
-      if (oaiCompatDiscoveryInFlight === inFlight) {
-        oaiCompatDiscoveryCache = { value, loadedAt: Date.now() };
+      if (context.oaiCompatDiscoveryInFlight === inFlight) {
+        context.oaiCompatDiscoveryCache = { value, loadedAt: Date.now() };
       }
       return value;
     })
     .finally(() => {
-      if (oaiCompatDiscoveryInFlight === inFlight) {
-        oaiCompatDiscoveryInFlight = undefined;
+      if (context.oaiCompatDiscoveryInFlight === inFlight) {
+        context.oaiCompatDiscoveryInFlight = undefined;
       }
     });
-  oaiCompatDiscoveryInFlight = inFlight;
+  context.oaiCompatDiscoveryInFlight = inFlight;
   return inFlight;
 }
 
 /** Direct API-key providers (NVIDIA NIM, Anthropic, OpenAI, Groq, …) in one call. */
-function discoverDirectProviders(force = false): Promise<DirectProvidersResponse> {
+function discoverDirectProviders(force = false, projectId?: string): Promise<DirectProvidersResponse> {
+  const context = discoveryContext(projectId);
   if (
     !force &&
-    directDiscoveryCache &&
-    Date.now() - directDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
+    context.directDiscoveryCache &&
+    Date.now() - context.directDiscoveryCache.loadedAt < DISCOVERY_CACHE_MS
   ) {
-    return Promise.resolve(directDiscoveryCache.value);
+    return Promise.resolve(context.directDiscoveryCache.value);
   }
-  if (directDiscoveryInFlight) return directDiscoveryInFlight;
-  const request = apiFetch("/providers/models").then(async (response) =>
+  if (context.directDiscoveryInFlight) return context.directDiscoveryInFlight;
+  const request = apiFetch("/providers/models", {}, projectId).then(async (response) =>
     response.ok
       ? ((await response.json()) as DirectProvidersResponse)
       : { providers: [], models: [] },
   );
   const inFlight = request
     .then((value) => {
-      if (directDiscoveryInFlight === inFlight) {
-        directDiscoveryCache = { value, loadedAt: Date.now() };
+      if (context.directDiscoveryInFlight === inFlight) {
+        context.directDiscoveryCache = { value, loadedAt: Date.now() };
       }
       return value;
     })
     .finally(() => {
-      if (directDiscoveryInFlight === inFlight) directDiscoveryInFlight = undefined;
+      if (context.directDiscoveryInFlight === inFlight) context.directDiscoveryInFlight = undefined;
     });
-  directDiscoveryInFlight = inFlight;
+  context.directDiscoveryInFlight = inFlight;
   return inFlight;
 }
 
 export interface UseModelsReturn {
-  /** Every model available to the user: static OpenRouter catalogue + live Ollama tags + user Fusion configs. */
+  /** Models listed for the current credentials, plus usable user Fusion configs. */
   models: Model[];
   /** Just the Ollama-sourced entries, in the order returned by the backend. */
   ollamaModels: Model[];
@@ -264,18 +267,23 @@ export interface UseModelsReturn {
    * onboarding prompt at a user who is merely still loading.
    */
   hasAnyModelAccess: boolean | null;
+  openrouterError: string | null;
   /** Re-fetch local and authenticated-provider models. */
   refresh: () => void;
 }
 
 /**
- * Merge the static OpenRouter catalogue with connected Pi OAuth providers,
+ * Merge the authenticated OpenRouter catalogue with connected Pi OAuth providers,
  * key-configured direct providers, local Ollama tags, and user Fusion presets.
  *
  * Discovery is best-effort: unavailable sources are marked disconnected while
  * other providers remain usable. The hook refreshes on project/auth changes.
  */
 export function useModels(): UseModelsReturn {
+  const scope = useProjectScopeId();
+  const projectId = process.env.NEXT_PUBLIC_KADY_MULTI_TENANT === "1" ? scope : undefined;
+  const activeScope = useRef(projectId); activeScope.current = projectId;
+  const discoverySeq = useRef({ ollama: 0, local: 0, direct: 0 });
   const [ollamaModels, setOllamaModels] = useState<Model[]>([]);
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
   const [ollamaLoaded, setOllamaLoaded] = useState(false);
@@ -294,70 +302,92 @@ export function useModels(): UseModelsReturn {
   const [openrouterConfigured, setOpenrouterConfigured] = useState<boolean | null>(
     null,
   );
+  const [routerModels, setRouterModels] = useState<Model[]>([]);
+  const [openrouterError, setOpenrouterError] = useState<string | null>(null);
+  const [routerLoaded, setRouterLoaded] = useState(false);
   const providerRequestId = useRef(0);
 
   const fetchOllama = useCallback((force = false) => {
-    void discoverOllama(force)
+    const requestId = ++discoverySeq.current.ollama;
+    void discoverOllama(force, projectId)
       .then((data) => {
+        if (requestId !== discoverySeq.current.ollama || activeScope.current !== projectId) return;
         setOllamaAvailable(Boolean(data.available));
         setOllamaModels(Array.isArray(data.models) ? data.models : []);
         setOllamaLoaded(true);
       })
       .catch(() => {
+        if (requestId !== discoverySeq.current.ollama || activeScope.current !== projectId) return;
         setOllamaAvailable(false);
         setOllamaModels([]);
         setOllamaLoaded(true);
       });
-  }, []);
+  }, [projectId]);
 
   const fetchOpenAICompatible = useCallback((force = false) => {
-    void discoverOpenAICompatible(force)
+    const requestId = ++discoverySeq.current.local;
+    void discoverOpenAICompatible(force, projectId)
       .then((data) => {
+        if (requestId !== discoverySeq.current.local || activeScope.current !== projectId) return;
         setOaiCompatAvailable(Boolean(data.available));
         setOaiCompatConfigured(Boolean(data.configured));
         setOaiCompatModels(Array.isArray(data.models) ? data.models : []);
         setOaiCompatLoaded(true);
       })
       .catch(() => {
+        if (requestId !== discoverySeq.current.local || activeScope.current !== projectId) return;
         setOaiCompatAvailable(false);
         setOaiCompatModels([]);
         setOaiCompatLoaded(true);
       });
-  }, []);
+  }, [projectId]);
 
   const fetchDirect = useCallback((force = false) => {
-    void discoverDirectProviders(force)
+    const requestId = ++discoverySeq.current.direct;
+    void discoverDirectProviders(force, projectId)
       .then((data) => {
+        if (requestId !== discoverySeq.current.direct || activeScope.current !== projectId) return;
         setDirectProviders(Array.isArray(data.providers) ? data.providers : []);
-        setDirectModels(Array.isArray(data.models) ? data.models : []);
+        setDirectModels(Array.isArray(data.models) ? data.models.filter(model => !model.id.startsWith("openrouter/")) : []);
         setDirectLoaded(true);
       })
       .catch(() => {
+        if (requestId !== discoverySeq.current.direct || activeScope.current !== projectId) return;
         setDirectProviders([]);
         setDirectModels([]);
         setDirectLoaded(true);
       });
-  }, []);
+  }, [projectId]);
 
   const fetchProviders = useCallback((force = false) => {
     const requestId = ++providerRequestId.current;
-    void discoverProviders(force)
+    void discoverProviders(force, projectId)
       .then((data) => {
-        if (requestId !== providerRequestId.current) return;
+        if (requestId !== providerRequestId.current || activeScope.current !== projectId) return;
         setProviderStatuses(data.providers);
         setProviderStatusLoaded(true);
-        setProviderModels(data.models);
+        setProviderModels(data.models.filter(model => !model.id.startsWith("openrouter/")));
+        setRouterModels(data.openrouterModels);
+        setOpenrouterError(data.openrouterError);
+        setRouterLoaded(true);
         if (data.openrouterConfigured !== null) {
           setOpenrouterConfigured(data.openrouterConfigured);
         }
       })
       .catch(() => {
-        // Keep the static catalogue usable while the local status endpoint is
-        // temporarily unavailable; the backend remains the final auth guard.
+        if (requestId !== providerRequestId.current || activeScope.current !== projectId) return;
+        setRouterModels([]);
+        setRouterLoaded(true);
+        setProviderStatusLoaded(true);
+        setOpenrouterError("Could not load model access. Retry when the server is available.");
       });
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
+    setRouterModels([]);
+    setRouterLoaded(false);
+    setOpenrouterConfigured(null);
+    setOpenrouterError(null);
     fetchOllama();
     fetchOpenAICompatible();
     fetchDirect();
@@ -408,6 +438,7 @@ export function useModels(): UseModelsReturn {
   const fusionModels = useMemo<Model[]>(() => {
     void fusionRevision; // recompute when Settings saves/edits Fusion configs
     const out: Model[] = [];
+    const permitted = new Set(routerModels.map(model => model.id));
     for (const fc of loadFusionConfigs()) {
       let cfg: Record<string, unknown>;
       try {
@@ -421,6 +452,7 @@ export function useModels(): UseModelsReturn {
 
       const panel = fusionPanelModels(cfg);
       const judgeId = fusionJudgeModel(cfg);
+      if (!panel.length || !judgeId || ![...panel, judgeId].every(id => permitted.has(id.startsWith("openrouter/") ? id : `openrouter/${id}`))) continue;
       const reasoning = (cfg.reasoning_effort as string) || "standard";
 
       // Combined price = each panel model once + the judge JUDGE_CALLS_PER_TURN
@@ -431,7 +463,7 @@ export function useModels(): UseModelsReturn {
       const missing: string[] = [];
       const priceOf = (modelId: string) => {
         const cleanId = modelId.replace(/^openrouter\//, "");
-        const found = OPENROUTER_MODELS.find(
+        const found = routerModels.find(
           (m) => m.id === `openrouter/${cleanId}` || m.id === modelId,
         );
         if (!found) missing.push(cleanId);
@@ -482,19 +514,21 @@ export function useModels(): UseModelsReturn {
       });
     }
     return out;
-  }, [fusionRevision, openrouterConfigured]);
+  }, [fusionRevision, openrouterConfigured, routerModels]);
 
   const openrouterModels = useMemo<Model[]>(
     () =>
-      OPENROUTER_MODELS.filter((model) => !model.isFusion).map((model) => ({
-        ...model,
-        sourceId: "openrouter",
-        sourceLabel: "OpenRouter",
-        billingMode: "payg",
-        reasoning: true,
-        available: openrouterConfigured !== false,
-      })),
-    [openrouterConfigured],
+      routerModels.filter((model) => !model.isFusion).map((model) => {
+        const entry = OPENROUTER_MODELS.find(entry => entry.id === model.id);
+        return {
+          ...entry, ...model,
+          provider: entry?.provider ?? model.provider,
+          tier: entry?.tier ?? model.tier,
+          sourceId: "openrouter", sourceLabel: "OpenRouter", billingMode: "payg",
+          available: openrouterConfigured === true,
+        };
+      }),
+    [openrouterConfigured, routerModels],
   );
 
   const enrichedOllamaModels = useMemo<Model[]>(
@@ -524,14 +558,14 @@ export function useModels(): UseModelsReturn {
   );
 
   const models = useMemo(
-    () => [
+    () => [...new Map([
       ...fusionModels,
       ...providerModels,
       ...openrouterModels,
       ...directModels,
       ...enrichedOllamaModels,
       ...enrichedOpenAICompatibleModels,
-    ],
+    ].map(model => [model.id, model])).values()],
     [
       enrichedOllamaModels,
       enrichedOpenAICompatibleModels,
@@ -579,7 +613,8 @@ export function useModels(): UseModelsReturn {
         model.id.startsWith("openrouter/") || model.id.startsWith("fusion/");
       if (isOllama && !ollamaLoaded) return "checking";
       if (isOaiCompat && !oaiCompatLoaded) return "checking";
-      if (isRouter && openrouterConfigured === null) return "checking";
+      if (isRouter && !routerLoaded) return "checking";
+      if (isRouter && openrouterError) return "unavailable";
       // Every other prefix is a direct Pi provider (OAuth or API key); both
       // status lists must land before we can call it disconnected.
       if (!isOllama && !isOaiCompat && !isRouter) {
@@ -592,7 +627,7 @@ export function useModels(): UseModelsReturn {
       // A persisted selection whose server stopped, or whose model was unloaded.
       if (isOaiCompat) return "unavailable";
       if (isRouter) {
-        return openrouterConfigured === false ? "unavailable" : "available";
+        return "unavailable";
       }
       const providerId = model.id.split("/", 1)[0];
       // A persisted model absent from the provider's listed catalogue (e.g. a
@@ -618,6 +653,8 @@ export function useModels(): UseModelsReturn {
       oauthProviderIds,
       ollamaLoaded,
       openrouterConfigured,
+      openrouterError,
+      routerLoaded,
       providerStatusLoaded,
     ],
   );
@@ -670,6 +707,7 @@ export function useModels(): UseModelsReturn {
 
   return {
     models,
+    openrouterError,
     ollamaModels: enrichedOllamaModels,
     ollamaAvailable,
     openaiCompatibleModels: enrichedOpenAICompatibleModels,

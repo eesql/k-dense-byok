@@ -179,6 +179,7 @@ export function ModelPickerList({
     openaiCompatibleAvailable,
     openaiCompatibleModels,
     openaiCompatibleConfigured,
+    openrouterError,
     refresh,
   } = useModels();
 
@@ -289,7 +290,7 @@ export function ModelPickerList({
             </span>
             {!available ? (
               <span className="rounded-full bg-destructive/10 px-1.5 py-px text-[10px] font-medium text-destructive">
-                disconnected
+                unavailable
               </span>
             ) : null}
           </div>
@@ -345,6 +346,7 @@ export function ModelPickerList({
         aria-label="Models"
         className={cn("relative overflow-y-auto py-1", compact ? "max-h-72" : "max-h-80")}
       >
+        {openrouterError ? <div role="alert" className="px-3 py-2 text-xs text-destructive">{openrouterError} <button type="button" className="underline" onClick={refresh}>Retry</button></div> : null}
         {groups.map((group, index) => (
           <div key={group.id}>
             {index > 0 ? <div className="my-1 border-t border-border/60" /> : null}
@@ -509,7 +511,7 @@ export function ModelSelector({
               ? `Select model, checking ${selected.label} provider`
               : selectedAvailable
               ? `Select model, current ${selected.label}`
-              : `Select model, current ${selected.label} is disconnected`
+              : `Select model, current ${selected.label} is unavailable`
           }
         >
           <BrainCircuitIcon className="size-3 shrink-0 text-muted-foreground" />
@@ -524,7 +526,7 @@ export function ModelSelector({
                   : "text-destructive",
               )}
             >
-              {selectedAvailability === "checking" ? "checking…" : "disconnected"}
+              {selectedAvailability === "checking" ? "checking…" : "unavailable"}
             </span>
           ) : null}
           <ChevronDownIcon
@@ -545,7 +547,7 @@ export function ModelSelector({
       >
         {selectedAvailability === "unavailable" ? (
           <div className="flex items-center gap-2 border-b bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
-            <span className="min-w-0 flex-1">{selected.label}&apos;s provider is not connected.</span>
+            <span className="min-w-0 flex-1">{selected.label} is not available with current model access. Choose an available model or review access.</span>
             <button
               type="button"
               className="shrink-0 font-medium underline-offset-2 hover:underline"
@@ -554,7 +556,7 @@ export function ModelSelector({
                 openSettings({ tab: "providers" });
               }}
             >
-              Connect…
+              Manage access…
             </button>
           </div>
         ) : null}

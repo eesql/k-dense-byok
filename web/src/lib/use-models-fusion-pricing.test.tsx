@@ -27,8 +27,8 @@ const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {
   fetchMock.mockReset();
   fetchMock.mockImplementation(
-    async () =>
-      new Response(JSON.stringify({}), {
+    async input =>
+      new Response(JSON.stringify(String(input).endsWith("/openrouter/models") ? { configured: true, models: CATALOGUE } : {}), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
