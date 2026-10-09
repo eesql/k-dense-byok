@@ -40,6 +40,19 @@ beforeEach(async () => {
 afterEach(async () => { await app.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("multi-tenant HTTP boundary", () => {
+  it("recovers only an existing admin, revokes its sessions and preserves team access", async () => {
+    const member = await tenantMember("alpha");
+    const replacement = "synthetic-replacement-password";
+    await expect(store.resetAdminPassword("alpha", replacement)).rejects.toThrow("admin_not_found");
+    await expect(store.resetAdminPassword("missing-admin", replacement)).rejects.toThrow("admin_not_found");
+    await expect(store.resetAdminPassword("administrator", "short")).rejects.toThrow("12–1024");
+    expect((await request("GET", "/api/projects")).statusCode).toBe(200);
+    await store.resetAdminPassword("ADMINISTRATOR", replacement);
+    expect((await request("GET", "/api/projects")).statusCode).toBe(401);
+    expect((await request("POST", "/api/management/login", { username: "administrator", password }, "")).statusCode).toBe(401);
+    expect((await request("POST", "/api/management/login", { username: "administrator", password: replacement }, "")).statusCode).toBe(200);
+    expect((await request("GET", "/api/projects", undefined, member.cookie)).statusCode).toBe(200);
+  });
   it("uses the platform master key for the restricted catalogue without starting a credential-bearing worker", async () => {
     const member = await tenantMember("alpha");
     await request("PUT", "/api/management/platform", { apiKey: "synthetic-master-key" });

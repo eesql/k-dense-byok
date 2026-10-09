@@ -81,6 +81,16 @@ export class TenantStore {
       return { id: userId, username: name, role: "admin", tenantId: null };
     });
   }
+  // Local recovery only; deliberately not exposed by an HTTP route.
+  async resetAdminPassword(username: unknown, password: unknown): Promise<void> {
+    const name = this.username(username), hash = await passwordHash(password);
+    this.transaction(() => {
+      const user = this.db.prepare("SELECT id FROM users WHERE username=? AND role='admin' AND enabled=1").get(name);
+      if (!user) throw new AccessError(404, "admin_not_found");
+      this.db.prepare("UPDATE users SET password=? WHERE id=?").run(hash, String(user.id));
+      this.db.prepare("DELETE FROM sessions WHERE userId=?").run(String(user.id));
+    });
+  }
   async login(username: unknown, password: unknown): Promise<{ token: string; user: Identity }> {
     const name = this.username(username);
     if (typeof password !== "string" || password.length > 1024) throw new AccessError(401, "invalid_login");

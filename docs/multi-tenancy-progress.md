@@ -76,3 +76,11 @@ The default-off switch and small guarded integration hooks preserve the original
 - Pre-push frontend full regression: 861 passed with four test workers; an initial high-parallelism workflow timeout did not recur. Both typechecks, launcher syntax and diff checks passed.
 - Backend full run: 1474 passed, 8 skipped; one existing corrupt-mzML test timed out. Its unchanged seven-test helper-error file passed on isolated retry. No product code or test timeouts were changed for those transient failures.
 - Commit scope includes the feature, fixes, management UI, tests and documentation. Both existing dependency lockfile edits remain local; no runtime data or credentials are included. No version bump or manual tag is added. Commit/push confirmation belongs in the delivery issue's completion comment.
+
+## LAN TLS deployment clarification — 2026-10-09
+
+- Reproduced the reported SSL protocol failure: HTTP health on port 3000 succeeds, while HTTPS on the same port fails the handshake. KADY_PUBLIC_URL sets the public origin/session policy; it does not enable a TLS listener.
+- Added a Caddy IP-address example with HTTPS 8443 forwarding to loopback HTTP 3000, explicit streaming flush, disabled automatic trust installation, and deployment/client CA trust instructions. No DNS or application dependency is needed for that proxy configuration.
+- The example passed Caddy's configuration validation using a temporary official binary and isolated temporary data/config directories. No global software, system trust or running user service was changed. Operators must install/run the proxy, restart the app with the matching public origin, and trust the CA on accessing devices.
+
+- Follow-up to caddy trust connection refusal: neither 2019 nor 8443 was listening. The example now binds the admin API explicitly to 127.0.0.1:2019 and documents the matching trust command. Caddy was started in a persistent foreground session; the admin CA endpoint returned HTTP 200 and the HTTPS 8443 health endpoint passed certificate validation using the generated public root certificate. System trust installation remains an operator step; the active proxy is retained for use.

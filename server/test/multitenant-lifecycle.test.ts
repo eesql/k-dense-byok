@@ -35,6 +35,32 @@ it("refuses disabled and malformed managed startup without creating state or a f
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+it("runs local admin recovery without starting services or creating a missing database", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kady-admin-reset-"));
+  const store = new TenantStore(root);
+  const password = "synthetic-replacement-password";
+  const run = (state: string, flags = ["--reset-admin"]) => spawnSync(process.execPath, ["--import", "tsx", "src/multitenant/main.ts", ...flags], {
+    cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 15000,
+    env: { PATH: process.env.PATH, KADY_MT_ROOT: state, KADY_ADMIN_USERNAME: "administrator", KADY_ADMIN_PASSWORD: password },
+  });
+  try {
+    await store.initializeAdmin("administrator", "synthetic-original-password");
+    const previous = await store.login("administrator", "synthetic-original-password");
+    const result = run(root);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Previous login sessions revoked");
+    expect(result.stdout + result.stderr).not.toContain(password);
+    expect(() => store.authenticate(previous.token)).toThrow("login_required");
+    expect((await store.login("administrator", password)).user.username).toBe("administrator");
+    expect(run(root, ["--reset-admin", "--init-admin"]).status).not.toBe(0);
+    const missing = path.join(root, "missing");
+    const failed = run(missing);
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain("Management database not found");
+    expect(fs.existsSync(missing)).toBe(false);
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 it("keeps a live manager's commitments intact and recovers only after the owning manager closes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kady-recovery-"));
   const store = new TenantStore(root), admin = await store.initializeAdmin("administrator", "synthetic-admin-password");

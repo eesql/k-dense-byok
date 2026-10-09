@@ -10,7 +10,11 @@ import { multiTenantEnabled } from "../../../multi-tenancy-mode.mjs";
 
 const root = path.resolve(process.env.KADY_MT_ROOT || path.join(os.homedir(), ".kady", "multitenant"));
 if (process.platform !== "win32") process.umask(0o077);
-if (process.argv.includes("--init-admin")) {
+const initAdmin = process.argv.includes("--init-admin");
+const resetAdmin = process.argv.includes("--reset-admin");
+if (initAdmin && resetAdmin) throw new Error("Choose either --init-admin or --reset-admin");
+if (initAdmin || resetAdmin) {
+  if (resetAdmin && !fs.existsSync(path.join(root, "management.sqlite"))) throw new Error("Management database not found; check KADY_MT_ROOT");
   const input = createInterface({ input: process.stdin, output: process.stdout });
   const username = process.env.KADY_ADMIN_USERNAME || await input.question("Administrator username: ");
   input.close();
@@ -22,7 +26,15 @@ if (process.argv.includes("--init-admin")) {
     password = await prompt.question(""); prompt.close(); process.stdout.write("\n");
   }
   const store = new TenantStore(root);
-  try { await store.initializeAdmin(username, password); console.log("Administrator initialized."); } finally { store.close(); }
+  try {
+    if (resetAdmin) {
+      await store.resetAdminPassword(username, password);
+      console.log("Administrator password reset. Previous login sessions revoked.");
+    } else {
+      await store.initializeAdmin(username, password);
+      console.log("Administrator initialized.");
+    }
+  } finally { store.close(); }
 } else {
   if (!multiTenantEnabled()) throw new Error("Set KADY_MULTI_TENANT=1 to start this entry; use the existing launcher for single-user mode");
   const port = Number(process.env.KADY_MT_PORT || process.env.KADY_FRONTEND_PORT || 3000);

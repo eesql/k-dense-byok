@@ -1,0 +1,13 @@
+{
+	admin 127.0.0.1:2019
+	auto_https disable_redirects
+	skip_install_trust
+}
+
+# Replace this IP with the Mac's actual LAN address.
+https://172.20.10.10:8443 {
+	tls internal
+	reverse_proxy 127.0.0.1:3000 {
+		flush_interval -1
+	}
+}
